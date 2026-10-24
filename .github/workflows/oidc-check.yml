@@ -18,6 +18,10 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          package-manager-cache: false
       - name: npm CLI для trusted publishing
         run: npm install --global "npm@^11.5.1"
       - name: обменять OIDC-токен на publish-токен npm
