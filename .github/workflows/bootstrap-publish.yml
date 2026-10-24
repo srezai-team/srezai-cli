@@ -1,0 +1,55 @@
+name: bootstrap-publish
+
+# ВРЕМЕННЫЙ workflow, только для самого первого выпуска srezai-cli.
+#
+# Почему он нужен: npm не умеет настраивать trusted publishing для пакета,
+# которого ещё нет («Package must exist» в `npm trust`; в документации
+# trusted publishing настройка идёт из settings уже существующего пакета).
+# Поэтому первую версию (0.0.1) публикуем обычным токеном с bypass 2FA
+# (секрет NPM_TOKEN), а настоящую 0.1.0 — уже через OIDC trusted publishing.
+#
+# Порядок: bootstrap 0.0.1 → владелец добавляет trusted publisher в настройках
+# пакета → релизный тег публикует 0.1.0 через OIDC. После этого секрет NPM_TOKEN
+# удаляется, а этот файл — тоже (он больше не нужен).
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Введите bootstrap, чтобы опубликовать 0.0.1 токеном'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    if: inputs.confirm == 'bootstrap'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: npm CLI для публикации
+        run: npm install --global "npm@^11.5.1"
+      - name: .npmrc из секрета NPM_TOKEN
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "× нет секрета NPM_TOKEN (Settings → Secrets and variables → Actions)"
+            exit 1
+          fi
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
+          echo "токен получен из секрета (значение не печатаем)"
+      - name: опубликовать bootstrap-версию 0.0.1
+        run: |
+          node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json","utf8"));p.version="0.0.1";fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n");console.log("version -> 0.0.1 (только в CI, не коммитим)")'
+          npm publish --access public --loglevel verbose
+      - name: проверить, что пакет появился
+        run: |
+          version="$(npm view srezai-cli version)"
+          echo "npm: srezai-cli@$version"
+          [ "$version" = "0.0.1" ] || { echo "× ожидали 0.0.1"; exit 1; }
