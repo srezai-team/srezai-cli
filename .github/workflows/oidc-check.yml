@@ -1,0 +1,45 @@
+name: oidc-check
+
+# Быстрая проверка, что npm видит доверенного публикатора для srezai-cli.
+# Ничего не публикует: только меняет OIDC-токен GitHub на publish-токен npm.
+# Запуск: Actions → oidc-check → Run workflow (ref: main).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: npm CLI для trusted publishing
+        run: npm install --global "npm@^11.5.1"
+      - name: обменять OIDC-токен на publish-токен npm
+        run: |
+          set -euo pipefail
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || { echo "× нет OIDC-переменных (permissions)"; exit 1; }
+          node --input-type=module <<'JS'
+          const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL)
+          url.searchParams.append('audience', 'npm:registry.npmjs.org')
+          const r = await fetch(url, {
+            headers: { Accept: 'application/json', Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
+          })
+          const { value: idToken } = await r.json()
+          if (!idToken) { console.log('× GitHub не выдал id_token'); process.exit(1) }
+          const ex = await fetch('https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/srezai-cli', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${idToken}` },
+          })
+          const body = await ex.text()
+          console.log(`exchange HTTP ${ex.status}`)
+          try { const j = JSON.parse(body); console.log(JSON.stringify({ ...j, token: j.token ? '***' : undefined })) }
+          catch { console.log(body.slice(0, 500)) }
+          if (ex.status !== 200) { console.log('× npm не знает доверенного публикатора для srezai-cli'); process.exit(1) }
+          console.log('✓ доверенный публикатор найден — можно выпускать релиз')
+          JS
