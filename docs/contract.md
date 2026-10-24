@@ -36,3 +36,21 @@
 
 Ошибки печатаются в stderr в формате `srezai: ошибка [код]: текст`, чтобы агент
 видел и код, и человеческое объяснение.
+
+## Фактические формы ответов (проверено на проде 24.10.2026)
+
+Пробный режим без ключа, по одному вызову на команду:
+
+- `search` → `{ query, results[], infoboxes, answers, suggestions, enginesQueried,
+  producedBy, attempts, relaxedQuery, degraded, freshness }`.
+  Элемент `results[]`: `title, url, content, engine, category, source, score,
+  publishedDate, excerpt, chunks, rawContent, relevance`.
+- `read` → `{ pages[], meta }`, где `pages[]`: `url, title, markdown, truncated,
+  engine, meta: { tookMs, totalChars, offset, nextOffset, hasMore, tokensApprox,
+  cached, attempts, httpStatus }`.
+  🔴 Продолжение чтения: брать `pages[0].meta.nextOffset` (не считать самому) и
+  передавать в `--offset`. В MCP это правило уже описано; в CLI работает так же.
+- `whoami` — локально, сети не касается.
+
+Остальные команды проверяются в R4 тем же способом (дешёвые вызовы, лимит
+пробного режима 25/сутки на IP).
