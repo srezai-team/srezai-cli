@@ -25,7 +25,10 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
       - run: node --test
-      - name: npm CLI должен уметь trusted publishing (>=11.5.1)
+      - name: npm CLI для trusted publishing (>=11.5.1, с запасом на будущее)
+        run: npm install --global "npm@^11.5.1"
+
+      - name: проверить версию npm
         run: |
           version="$(npm --version)"
           echo "npm $version"
