@@ -276,7 +276,7 @@ function compact(object) {
 
 const COMMANDS = {
   search: {
-    usage: 'srezai search "запрос" [--num 10] [--depth basic|advanced] [--category general|news|it|science]',
+    usage: 'srezai search "запрос" [--num 10] [--depth flash|auto] [--time-range week] [--category general|news|it|science] [--excerpts]',
     summary: "Поиск в вебе. Возвращает ссылки, сниппеты и оценки релевантности.",
     run(positionals, flags) {
       if (!positionals.length) throw new CliError('Нужен запрос: srezai search "…"', { exit: EXIT.usage });
@@ -303,7 +303,7 @@ const COMMANDS = {
   },
 
   read: {
-    usage: "srezai read <url> [<url> …] [--max-chars 4000] [--offset 0] [--fresh]",
+    usage: "srezai read <url> [<url> …] [--max-chars 4000] [--offset 0] [--fresh] [--engine dynamic|stealth]",
     summary: "Текст страницы чистым Markdown. Поддерживает PDF/Office, окна через --offset.",
     run(positionals, flags) {
       if (!positionals.length) throw new CliError("Нужен адрес: srezai read https://…", { exit: EXIT.usage });
@@ -320,7 +320,7 @@ const COMMANDS = {
   },
 
   map: {
-    usage: "srezai map <url> [--limit 50] [--search подстрока] [--intent «цель»]",
+    usage: "srezai map <url> [--limit 50] [--search подстрока] [--select-paths a,b] [--intent «цель»]",
     summary: "Карта адресов сайта (только URL, без чтения страниц).",
     run(positionals, flags) {
       if (!positionals.length) throw new CliError("Нужен адрес: srezai map https://…", { exit: EXIT.usage });
@@ -338,7 +338,7 @@ const COMMANDS = {
   },
 
   crawl: {
-    usage: "srezai crawl <url> [--limit 5] [--search слово] [--select-paths a,b]",
+    usage: "srezai crawl <url> [--limit 5] [--search слово] [--select-paths a,b] [--exclude-paths a,b] [--intent «цель»]",
     summary: "Карта плюс чтение страниц раздела; 1 кредит за страницу.",
     run(positionals, flags) {
       if (!positionals.length) throw new CliError("Нужен адрес: srezai crawl https://…", { exit: EXIT.usage });
@@ -356,7 +356,7 @@ const COMMANDS = {
   },
 
   extract: {
-    usage: 'srezai extract <url> [<url> …] [--schema \'{"title":"string"}\'] [--instruction "…"]',
+    usage: 'srezai extract <url> [<url> …] [--schema \'{"title":"string"}\'] [--instruction "…"] [--engine dynamic|stealth]',
     summary: "Извлечение по JSON-схеме: в контекст приходят только запрошенные поля.",
     run(positionals, flags) {
       if (!positionals.length) throw new CliError("Нужен адрес: srezai extract https://…", { exit: EXIT.usage });
@@ -394,7 +394,7 @@ const COMMANDS = {
   },
 
   verify: {
-    usage: 'srezai verify "утверждение" [--language ru] [--max-sources 4]',
+    usage: 'srezai verify "утверждение" [--language ru] [--max-sources 4] [--query «поиск»] [--time-range year]',
     summary: "Проверка утверждения: вердикт и дословные цитаты с источниками.",
     run(positionals, flags) {
       if (!positionals.length) throw new CliError('Нужно утверждение: srezai verify "…"', { exit: EXIT.usage });
@@ -449,7 +449,7 @@ const COMMANDS = {
   },
 
   transcript: {
-    usage: "srezai transcript <video-id|url> [<…>] [--languages ru,en] [--from 0] [--to 600]",
+    usage: "srezai transcript <video-id|url> [<…>] [--languages ru,en] [--from 0] [--to 600] [--timestamps] [--speakers]",
     summary: "Субтитры YouTube: текст с таймкодами, до 200 тыс. символов в версии 0.4+.",
     run(positionals, flags) {
       if (!positionals.length) throw new CliError("Нужен id или адрес видео: srezai transcript …", { exit: EXIT.usage });

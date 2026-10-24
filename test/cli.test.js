@@ -96,3 +96,30 @@ test("аргументы с shell-метасимволами не исполня
   assert.notEqual(r.code, 0, "сеть должна быть недоступна в тесте");
   assert.equal(existsSync(marker), false, "shell-команда из аргумента не должна выполниться");
 });
+
+test("справка не врёт: значения --depth и состав команд", () => {
+  const r = run(["--help"]);
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /--depth flash\|auto/);
+  assert.ok(!r.stdout.includes("basic|advanced"), "устаревшие значения depth в справке");
+  for (const name of [
+    "search", "read", "map", "crawl", "extract", "fetch", "verify",
+    "answer", "deep", "transcript", "media", "register", "whoami",
+  ]) {
+    assert.match(r.stdout, new RegExp(`srezai ${name}\\b`), `в справке нет команды ${name}`);
+  }
+});
+
+test("флаги из справки принимаются парсером", () => {
+  const cases = [
+    ["search", "x", "--depth", "flash", "--time-range", "week", "--excerpts"],
+    ["read", "https://example.com", "--engine", "dynamic", "--offset", "0"],
+    ["crawl", "https://example.com", "--select-paths", "/docs/", "--exclude-paths", "/tags/"],
+    ["verify", "x", "--query", "y", "--time-range", "year"],
+    ["transcript", "abc", "--timestamps", "--speakers"],
+  ];
+  for (const args of cases) {
+    const r = run([...args], { SREZAI_CLI_DEV: "1", SREZAI_DEV_BASE_URL: "http://127.0.0.1:1" });
+    assert.ok(!/Неизвестный флаг/.test(r.stderr), `${args[0]}: флаг не распознан`);
+  }
+});
