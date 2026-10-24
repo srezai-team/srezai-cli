@@ -2,7 +2,9 @@ name: release
 
 # Публикация по тегу v*: npm trusted publishing (OIDC), без токенов.
 # Настройка на npmjs.com: package srezai-cli → Settings → Trusted publishing →
-# GitHub Actions, repository srezai-team/srezai-cli, workflow release.yml, environment npm.
+# GitHub Actions, repository srezai-team/srezai-cli, workflow release.yml,
+# environment npm (если поле Environment в npm оставили пустым — сработает
+# второй job publish-without-env, см. ниже).
 on:
   push:
     tags:
@@ -14,12 +16,15 @@ permissions:
   id-token: write # обязательно для OIDC
 
 jobs:
-  publish:
+  # Основная попытка: ровно та конфигурация, что в инструкции владельцу.
+  publish-with-env:
     runs-on: ubuntu-latest
     environment: npm
     permissions:
       contents: read
       id-token: write # дублируем на уровне job: environment не должен «съесть» право
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -45,19 +50,111 @@ jobs:
       - run: node --test
       - name: npm CLI для trusted publishing (>=11.5.1, с запасом на будущее)
         run: npm install --global "npm@^11.5.1"
-
       - name: проверить версию npm
         run: |
           version="$(npm --version)"
           echo "npm $version"
           printf '11.5.1\n%s\n' "$version" | sort -V -C || { echo "нужен npm >= 11.5.1"; exit 1; }
-      - name: npm publish с verbose-логом — покажет причину отказа обмена OIDC-токена
-        run: npm publish --access public --provenance --loglevel verbose
+      - name: "npm publish (с environment: npm)"
+        id: publish
+        continue-on-error: true
+        run: |
+          set +e
+          npm publish --access public --provenance --loglevel verbose > publish-env.log 2>&1
+          code=$?
+          if [ "$code" -eq 0 ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "✓ пакет опубликован"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "× публикация не удалась (код $code), последние строки лога:"
+            tail -40 publish-env.log
+          fi
+          exit 0
+
+  # Запасной вариант: если в настройках npm поле Environment оставили пустым,
+  # первый job получит «package not found». Здесь тот же publish без окружения.
+  # Запускается только когда первый job прошёл проверки, но не опубликовал.
+  publish-without-env:
+    needs: publish-with-env
+    if: needs.publish-with-env.result == 'success' && needs.publish-with-env.outputs.published != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Убедиться, что токен-аутентификации нет (только OIDC)
+        run: |
+          echo "NODE_AUTH_TOKEN=" >> "$GITHUB_ENV"
+          echo "NPM_CONFIG_USERCONFIG=" >> "$GITHUB_ENV"
+          rm -f "$HOME/.npmrc"
+      - name: npm CLI для trusted publishing
+        run: npm install --global "npm@^11.5.1"
+      - name: npm publish (без environment)
+        id: publish
+        continue-on-error: true
+        run: |
+          set +e
+          npm publish --access public --provenance --loglevel verbose > publish-noenv.log 2>&1
+          code=$?
+          if [ "$code" -eq 0 ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "✓ пакет опубликован (вариант без environment)"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "× публикация не удалась (код $code), последние строки лога:"
+            tail -40 publish-noenv.log
+          fi
+          exit 0
+
+  # Итог: пакет обязан быть в npm с provenance и без зависимостей. Красный здесь
+  # значит «не опубликовано», а не «непонятно что».
+  verify:
+    needs: [publish-with-env, publish-without-env]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: пакет и версия в npm
+        run: |
+          set -euo pipefail
+          version="$(npm view srezai-cli version 2>/dev/null || true)"
+          echo "npm view srezai-cli version = ${version:-<нет>}"
+          [ "$version" = "0.1.0" ] || { echo "× в npm нет srezai-cli@0.1.0"; exit 1; }
+          echo "✓ srezai-cli@0.1.0 в npm"
+      - name: provenance-аттестация
+        run: |
+          set -euo pipefail
+          attest="$(npm view srezai-cli@0.1.0 dist.attestations --json 2>/dev/null || echo null)"
+          echo "$attest"
+          [ "$attest" != "null" ] && [ -n "$attest" ] || { echo "× у версии нет provenance-аттестации"; exit 1; }
+      - name: ноль зависимостей
+        run: |
+          node -e '
+            const p = require("./package.json");
+            const deps = Object.keys(p.dependencies || {}).length;
+            const peer = Object.keys(p.peerDependencies || {}).length;
+            const opt = Object.keys(p.optionalDependencies || {}).length;
+            console.log({ deps, peer, opt });
+            if (deps + peer + opt !== 0) { console.error("× появились зависимости"); process.exit(1); }
+            console.log("✓ зависимостей нет");
+          '
 
   # GitHub Release — для людей, которые ищут пакет не в npm. Отдельная job:
   # публикация токеном read-only, а на создание релиза нужно contents: write.
   github-release:
-    needs: publish
+    needs: verify
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
