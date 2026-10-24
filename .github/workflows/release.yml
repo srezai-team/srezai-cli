@@ -51,4 +51,5 @@ jobs:
           version="$(npm --version)"
           echo "npm $version"
           printf '11.5.1\n%s\n' "$version" | sort -V -C || { echo "нужен npm >= 11.5.1"; exit 1; }
-      - run: npm publish --access public --provenance
+      - name: npm publish с verbose-логом — покажет причину отказа обмена OIDC-токена
+        run: npm publish --access public --provenance --loglevel verbose
