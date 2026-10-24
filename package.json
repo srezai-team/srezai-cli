@@ -1,0 +1,43 @@
+{
+  "name": "srezai-cli",
+  "version": "0.1.0",
+  "description": "Web access for AI agents: search, read, map, crawl, extract, verify, answers and deep research via the srezai API. Zero dependencies, keeps tool schemas out of the model context.",
+  "type": "module",
+  "bin": {
+    "srezai": "bin/srezai.js"
+  },
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test",
+    "scan": "sh scripts/secret-scan.sh"
+  },
+  "keywords": [
+    "web-search",
+    "ai-agents",
+    "mcp",
+    "cli",
+    "scraping",
+    "russian-web",
+    "srezai"
+  ],
+  "author": "srezai",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/srezai-team/srezai-cli.git"
+  },
+  "homepage": "https://srezai.ru/docs/cli",
+  "bugs": {
+    "url": "https://github.com/srezai-team/srezai-cli/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
