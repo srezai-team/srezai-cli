@@ -29,5 +29,5 @@ jobs:
         run: |
           version="$(npm --version)"
           echo "npm $version"
-          printf '%s\n11.5.1\n' "$version" | sort -V -C || { echo "нужен npm >= 11.5.1"; exit 1; }
+          printf '11.5.1\n%s\n' "$version" | sort -V -C || { echo "нужен npm >= 11.5.1"; exit 1; }
       - run: npm publish --access public --provenance
