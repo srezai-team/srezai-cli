@@ -1,6 +1,12 @@
 name: oidc-check
 
-# Быстрая проверка, что npm видит доверенного публикатора для srezai-cli.
+# Проверка, что npm видит доверенного публикатора, и заодно диагностика
+# расхождения настроек: npm хранит пару «репозиторий + workflow + environment».
+# Если в настройках npm environment оставили пустым, а в release.yml стоит
+# `environment: npm`, обмен токеном отвечает 404 «package not found» — хотя
+# человек уверен, что всё сохранил. Поэтому проверяем оба варианта: с окружением
+# `npm` и без окружения. По какому из них 200, видно, что именно поправить.
+#
 # Ничего не публикует: только меняет OIDC-токен GitHub на publish-токен npm.
 # Запуск: Actions → oidc-check → Run workflow (ref: main).
 on:
@@ -17,7 +23,8 @@ permissions:
   id-token: write
 
 jobs:
-  check:
+  with-env:
+    name: "exchange (environment: npm)"
     runs-on: ubuntu-latest
     environment: npm
     permissions:
@@ -30,16 +37,17 @@ jobs:
           package-manager-cache: false
       - name: npm CLI для trusted publishing
         run: npm install --global "npm@^11.5.1"
-      - name: обменять OIDC-токен на publish-токен npm
+      - name: обменять OIDC-токен (с окружением npm)
         env:
           PACKAGE: ${{ inputs.package || 'srezai-cli' }}
+          CHECK_ENV: npm
         run: |
           set -euo pipefail
           test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || { echo "× нет OIDC-переменных (permissions)"; exit 1; }
           node --input-type=module <<'JS'
-          const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL)
-          url.searchParams.append('audience', 'npm:registry.npmjs.org')
-          const r = await fetch(url, {
+          const requestUrl = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL)
+          requestUrl.searchParams.append('audience', 'npm:registry.npmjs.org')
+          const r = await fetch(requestUrl, {
             headers: { Accept: 'application/json', Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
           })
           const { value: idToken } = await r.json()
@@ -50,9 +58,50 @@ jobs:
             headers: { Authorization: `Bearer ${idToken}` },
           })
           const body = await ex.text()
-          console.log(`exchange HTTP ${ex.status}`)
+          console.log(`CHECK_ENV=${process.env.CHECK_ENV || '(none)'} PACKAGE=${pkg} exchange HTTP ${ex.status}`)
           try { const j = JSON.parse(body); console.log(JSON.stringify({ ...j, token: j.token ? '***' : undefined })) }
           catch { console.log(body.slice(0, 500)) }
-          if (ex.status !== 200) { console.log(`× npm не знает доверенного публикатора для ${pkg}`); process.exit(1) }
-          console.log(`✓ доверенный публикатор найден для ${pkg} — можно выпускать релиз`)
+          if (ex.status !== 200) { console.log(`× нет совпадения для ${pkg} (environment: npm)`); process.exit(1) }
+          console.log(`✓ публикатор найден для ${pkg} (environment: npm)`)
+          JS
+
+  no-env:
+    name: exchange (без окружения)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: npm CLI для trusted publishing
+        run: npm install --global "npm@^11.5.1"
+      - name: обменять OIDC-токен (без окружения)
+        env:
+          PACKAGE: ${{ inputs.package || 'srezai-cli' }}
+          CHECK_ENV: none
+        run: |
+          set -euo pipefail
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || { echo "× нет OIDC-переменных (permissions)"; exit 1; }
+          node --input-type=module <<'JS'
+          const requestUrl = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL)
+          requestUrl.searchParams.append('audience', 'npm:registry.npmjs.org')
+          const r = await fetch(requestUrl, {
+            headers: { Accept: 'application/json', Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
+          })
+          const { value: idToken } = await r.json()
+          if (!idToken) { console.log('× GitHub не выдал id_token'); process.exit(1) }
+          const pkg = process.env.PACKAGE || 'srezai-cli'
+          const ex = await fetch(`https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${encodeURIComponent(pkg)}`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${idToken}` },
+          })
+          const body = await ex.text()
+          console.log(`CHECK_ENV=${process.env.CHECK_ENV || '(none)'} PACKAGE=${pkg} exchange HTTP ${ex.status}`)
+          try { const j = JSON.parse(body); console.log(JSON.stringify({ ...j, token: j.token ? '***' : undefined })) }
+          catch { console.log(body.slice(0, 500)) }
+          if (ex.status !== 200) { console.log(`× нет совпадения для ${pkg} (без окружения)`); process.exit(1) }
+          console.log(`✓ публикатор найден для ${pkg} (без окружения)`)
           JS
