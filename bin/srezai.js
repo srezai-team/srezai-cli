@@ -120,7 +120,14 @@ function describeApiError(status, payload) {
 
 async function request(method, path, body, flags = {}) {
   const url = API_BASE + path;
-  const headers = { accept: "application/json" };
+  // Представляемся серверу: по X-Srezai-Skill в журнале видно, что запрос пришёл
+  // из CLI, а не из чужой обёртки (колонку client пишет MCP-транспорт; для REST
+  // заголовок безвреден и понадобится, когда её начнут писать и REST-роуты).
+  const headers = {
+    accept: "application/json",
+    "user-agent": `srezai-cli/${VERSION} (node ${process.version}; ${process.platform} ${process.arch})`,
+    "x-srezai-skill": `srezai-cli/${VERSION}`,
+  };
   if (body !== undefined) headers["content-type"] = "application/json";
   const { key } = resolveKey();
   if (key) headers.authorization = `Bearer ${key}`;
@@ -487,7 +494,14 @@ const COMMANDS = {
     run(positionals, flags) {
       const email = flags.email;
       if (!email) throw new CliError("Нужен --email: srezai register --email …", { exit: EXIT.usage });
-      return request("POST", "/api/v1/auth/quick-register", { email }, flags);
+      // agent/integration — для воронки: аккаунт помечается как созданный из CLI,
+      // поэтому в отчётах видно, сколько регистраций дал именно этот канал.
+      return request(
+        "POST",
+        "/api/v1/auth/quick-register",
+        { email, agent: "srezai-cli", integration: "cli" },
+        flags,
+      );
     },
   },
 

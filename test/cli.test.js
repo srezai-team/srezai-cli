@@ -123,3 +123,50 @@ test("флаги из справки принимаются парсером", (
     assert.ok(!/Неизвестный флаг/.test(r.stderr), `${args[0]}: флаг не распознан`);
   }
 });
+
+test("CLI представляется серверу и помечает регистрацию каналом cli", async () => {
+  const http = await import("node:http");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+  const received = { headers: null, body: null };
+  const server = http.createServer((req, res) => {
+    let data = "";
+    req.on("data", (c) => { data += c; });
+    req.on("end", () => {
+      received.headers = req.headers;
+      try { received.body = JSON.parse(data || "{}"); } catch { received.body = null; }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  try {
+    // Асинхронный запуск обязателен: при spawnSync сервер в этом же процессе
+    // не может принять соединение, и CLI просто ждёт ответа.
+    await execFileAsync(process.execPath, [CLI, "register", "--email", "agent@example.com"], {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        SREZAI_CONFIG: "/nonexistent/srezai/config.json",
+        SREZAI_CLI_DEV: "1",
+        SREZAI_DEV_BASE_URL: `http://127.0.0.1:${port}`,
+      },
+    });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+  assert.equal(received.body.email, "agent@example.com");
+  assert.equal(received.body.agent, "srezai-cli");
+  assert.equal(received.body.integration, "cli");
+  assert.match(received.headers["x-srezai-skill"], /^srezai-cli\/\d+\.\d+\.\d+$/);
+  assert.match(received.headers["user-agent"], /^srezai-cli\/\d+\.\d+\.\d+ \(node /);
+});
+
+test("версия в bin совпадает с package.json", () => {
+  const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
+  const source = readFileSync(CLI, "utf8");
+  assert.match(source, new RegExp(`const VERSION = "${pkg.version.replace(/\./g, "\\.")}"`));
+});
