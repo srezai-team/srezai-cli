@@ -10,12 +10,12 @@
 | `read` | `POST /api/v1/read` | urls[] (или url), maxChars, offset, engine, fresh, webmcp |
 | `map` | `POST /api/v1/map` | url, limit, search, selectPaths[], excludePaths[], intent, includeSubdomains |
 | `crawl` | `POST /api/v1/crawl` | url, limit, search, selectPaths[], excludePaths[], intent, includeSubdomains |
-| `extract` | `POST /api/v1/extract` | urls[], schema, instruction, engine |
+| `extract` | `POST /api/v1/extract` | urls[], schema (объект, не строка), instruction, engine |
 | `fetch` | `POST /api/v1/fetch` | url, maxChars |
 | `verify` | `POST /api/v1/verify` | claim, language, maxSources, query, timeRange |
 | `answer` | `POST /api/v1/answer` | query, depth, language |
-| `deep` | `POST /api/v1/deep` | query, depth, language |
-| `deep status` | `GET /api/v1/deep?id=` | — |
+| `deep` | `POST /api/v1/deep` | query, depth, language, async (асинхронно → талон 202) |
+| `deep status` | `GET /api/v1/deep?ticket=N` | только талон; `?id=` не принимается |
 | `transcript` | `POST /api/v1/transcript` | videos[], languages[], from, to, maxChars, speakers, timestamps |
 | `media` | `POST /api/v1/media` | query, num, safe, timeRange |
 | `register` | `POST /api/v1/auth/quick-register` | email |
@@ -54,3 +54,27 @@
 
 Остальные команды проверяются в R4 тем же способом (дешёвые вызовы, лимит
 пробного режима 25/сутки на IP).
+
+## Проверено на проде 24.10.2026 (QA-аккаунт, ключ)
+
+| Команда | Форма ответа (верхний уровень) |
+|---|---|
+| `search` | `query, results[], infoboxes, answers, suggestions, enginesQueried, producedBy` |
+| `read` | `pages[] (url, title, markdown, truncated, engine, meta.nextOffset), meta` |
+| `transcript` | `results[], errors, skipped, credits, meta` |
+| `map` | `url, origin, total, returned, pages[], sections, source, sitemaps` |
+| `crawl` | `url, origin, map, pages[], skipped, credits, meta` |
+| `extract` | `pages[] (url, title, data, missing[], truncated, meta), meta` |
+| `fetch` | `url, title, screenshotUrl, degraded, markdown, truncated, meta` |
+| `media` | `query, images[], unresponsiveEngines, meta` |
+| `answer` | `answer, sources[], confidence, pagesRead, tookMs` |
+| `verify` | `claim, verdict, confidence, incomplete, agreeing, disagreeing, evidence, caveats` |
+| `deep` (async) | `202` + талон; опрос `GET ?ticket=N` → `stage, status, progress, result, error, id` |
+
+Найденные при проверке правки (вошли в 0.1.0):
+- `extract` сначала отправлял `schema` строкой — сервер отвечал `bad_request`;
+  теперь отправляется разобранный объект (`validateSchema` принимает и
+  сокращённую форму, и полный JSON Schema).
+- `deep status` ходил на `?id=` — сервер принимает только `?ticket=N`.
+- коды ошибок с верхнего уровня (`payload.code`) теперь попадают в маску ошибки,
+  а не превращаются в `http_400`.

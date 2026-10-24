@@ -104,8 +104,8 @@ function verboseLog(flags, message) {
 
 function describeApiError(status, payload) {
   const err = payload?.error ?? payload;
-  const code = err?.code ?? `http_${status}`;
-  const ru = err?.detail?.ru ?? err?.message ?? "";
+  const code = err?.code ?? payload?.code ?? `http_${status}`;
+  const ru = err?.detail?.ru ?? payload?.detail?.ru ?? err?.message ?? "";
   const hint = {
     400: "Проверьте параметры команды.",
     401: "Ключ отсутствует, отозван или неверен. Получите новый: srezai register --email …",
@@ -224,6 +224,7 @@ const BOOLEAN_FLAGS = new Set([
   "timestamps",
   "safe",
   "webmcp",
+  "async",
 ]);
 
 function setFlag(flags, name, value) {
@@ -361,8 +362,8 @@ const COMMANDS = {
       if (!positionals.length) throw new CliError("Нужен адрес: srezai extract https://…", { exit: EXIT.usage });
       let schema;
       if (flags.schema !== undefined) {
-        schema = typeof flags.schema === "string" ? flags.schema : null;
-        if (!schema || !tryParse(schema)) {
+        schema = typeof flags.schema === "string" ? tryParse(flags.schema) : flags.schema;
+        if (!schema || typeof schema !== "object") {
           throw new CliError("--schema: ожидается JSON-объект в кавычках.", {
             code: "bad_flag",
             exit: EXIT.usage,
@@ -423,18 +424,23 @@ const COMMANDS = {
   },
 
   deep: {
-    usage: 'srezai deep "тема" | srezai deep status <id>',
-    summary: "Глубокое исследование: запуск и опрос по id.",
+    usage: 'srezai deep "тема" [--async] | srezai deep status <ticket>',
+    summary: "Глубокое исследование: синхронно (до ~150 с) или с талоном и опросом.",
     run(positionals, flags) {
       if (positionals[0] === "status") {
-        if (!positionals[1]) throw new CliError("Нужен id: srezai deep status <id>", { exit: EXIT.usage });
-        return request("GET", `/api/v1/deep?id=${encodeURIComponent(positionals[1])}`, undefined, {
+        if (!positionals[1]) throw new CliError("Нужен талон: srezai deep status <ticket>", { exit: EXIT.usage });
+        return request("GET", `/api/v1/deep?ticket=${encodeURIComponent(positionals[1])}`, undefined, {
           ...flags,
           timeout: flags.timeout || 120,
         });
       }
       if (!positionals.length) throw new CliError('Нужна тема: srezai deep "…"', { exit: EXIT.usage });
-      const body = compact({ query: positionals.join(" "), depth: flags.depth, language: flags.language });
+      const body = compact({
+        query: positionals.join(" "),
+        depth: flags.depth,
+        language: flags.language,
+        async: flags.async || undefined,
+      });
       return request("POST", "/api/v1/deep", body, {
         ...flags,
         timeout: flags.timeout || 600,
