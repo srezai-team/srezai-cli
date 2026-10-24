@@ -25,6 +25,9 @@ permissions:
 jobs:
   with-env:
     name: "exchange (environment: npm)"
+    # Падение одного варианта — не провал проверки: важно, совпал ли хоть один.
+    # Итог подводит job verdict ниже.
+    continue-on-error: true
     runs-on: ubuntu-latest
     environment: npm
     permissions:
@@ -67,6 +70,7 @@ jobs:
 
   no-env:
     name: exchange (без окружения)
+    continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -105,3 +109,22 @@ jobs:
           if (ex.status !== 200) { console.log(`× нет совпадения для ${pkg} (без окружения)`); process.exit(1) }
           console.log(`✓ публикатор найден для ${pkg} (без окружения)`)
           JS
+
+  verdict:
+    name: итог
+    needs: [with-env, no-env]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: какой вариант совпал
+        run: |
+          echo "с окружением npm: ${{ needs.with-env.result }}"
+          echo "без окружения:    ${{ needs.no-env.result }}"
+          if [ "${{ needs.with-env.result }}" = "success" ] || [ "${{ needs.no-env.result }}" = "success" ]; then
+            echo "✓ доверенный публикатор найден — можно выпускать релиз"
+            exit 0
+          fi
+          echo "× npm не знает доверенного публикатора для srezai-cli («package not found»)"
+          echo "  Значит pending publisher не сохранён, либо поля не совпали:"
+          echo "  Organization=srezai-team, Repository=srezai-cli, Workflow=release.yml, Environment=npm."
+          exit 1
