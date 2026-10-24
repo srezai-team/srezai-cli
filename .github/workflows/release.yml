@@ -17,6 +17,9 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment: npm
+    permissions:
+      contents: read
+      id-token: write # дублируем на уровне job: environment не должен «съесть» право
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,6 +35,13 @@ jobs:
           echo "NODE_AUTH_TOKEN=" >> "$GITHUB_ENV"
           echo "NPM_CONFIG_USERCONFIG=" >> "$GITHUB_ENV"
           rm -f "$HOME/.npmrc"
+      - name: диагностика OIDC
+        run: |
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OIDC-переменные есть (URL задан)"
+          else
+            echo "× OIDC-переменных НЕТ — проверь permissions: id-token: write"
+          fi
       - run: node --test
       - name: npm CLI для trusted publishing (>=11.5.1, с запасом на будущее)
         run: npm install --global "npm@^11.5.1"
