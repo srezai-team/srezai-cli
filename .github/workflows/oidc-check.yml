@@ -5,7 +5,7 @@ name: oidc-check
 # Если в настройках npm environment оставили пустым, а в release.yml стоит
 # `environment: npm`, обмен токеном отвечает 404 «package not found» — хотя
 # человек уверен, что всё сохранил. Поэтому проверяем оба варианта: с окружением
-# `npm` и без окружения. По какому из них 200, видно, что именно поправить.
+# `npm` и без окружения. Итог подводит job verdict: успех, если совпал хоть один.
 #
 # Ничего не публикует: только меняет OIDC-токен GitHub на publish-токен npm.
 # Запуск: Actions → oidc-check → Run workflow (ref: main).
@@ -25,14 +25,13 @@ permissions:
 jobs:
   with-env:
     name: "exchange (environment: npm)"
-    # Падение одного варианта — не провал проверки: важно, совпал ли хоть один.
-    # Итог подводит job verdict ниже.
-    continue-on-error: true
     runs-on: ubuntu-latest
     environment: npm
     permissions:
       contents: read
       id-token: write
+    outputs:
+      matched: ${{ steps.exchange.outputs.matched }}
     steps:
       - uses: actions/setup-node@v4
         with:
@@ -41,6 +40,7 @@ jobs:
       - name: npm CLI для trusted publishing
         run: npm install --global "npm@^11.5.1"
       - name: обменять OIDC-токен (с окружением npm)
+        id: exchange
         env:
           PACKAGE: ${{ inputs.package || 'srezai-cli' }}
           CHECK_ENV: npm
@@ -48,33 +48,38 @@ jobs:
           set -euo pipefail
           test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || { echo "× нет OIDC-переменных (permissions)"; exit 1; }
           node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs'
+          const env = process.env.CHECK_ENV || '(none)'
+          const pkg = process.env.PACKAGE || 'srezai-cli'
+          const mark = (ok) => appendFileSync(process.env.GITHUB_OUTPUT, `matched=${ok ? 'true' : 'false'}\n`)
           const requestUrl = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL)
           requestUrl.searchParams.append('audience', 'npm:registry.npmjs.org')
           const r = await fetch(requestUrl, {
             headers: { Accept: 'application/json', Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
           })
           const { value: idToken } = await r.json()
-          if (!idToken) { console.log('× GitHub не выдал id_token'); process.exit(1) }
-          const pkg = process.env.PACKAGE || 'srezai-cli'
+          if (!idToken) { console.log('× GitHub не выдал id_token'); mark(false); process.exit(0) }
           const ex = await fetch(`https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${encodeURIComponent(pkg)}`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${idToken}` },
           })
           const body = await ex.text()
-          console.log(`CHECK_ENV=${process.env.CHECK_ENV || '(none)'} PACKAGE=${pkg} exchange HTTP ${ex.status}`)
+          console.log(`CHECK_ENV=${env} PACKAGE=${pkg} exchange HTTP ${ex.status}`)
           try { const j = JSON.parse(body); console.log(JSON.stringify({ ...j, token: j.token ? '***' : undefined })) }
           catch { console.log(body.slice(0, 500)) }
-          if (ex.status !== 200) { console.log(`× нет совпадения для ${pkg} (environment: npm)`); process.exit(1) }
-          console.log(`✓ публикатор найден для ${pkg} (environment: npm)`)
+          if (ex.status === 200) console.log(`✓ публикатор найден для ${pkg} (environment: ${env})`)
+          else console.log(`× нет совпадения для ${pkg} (environment: ${env})`)
+          mark(ex.status === 200)
           JS
 
   no-env:
     name: exchange (без окружения)
-    continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
+    outputs:
+      matched: ${{ steps.exchange.outputs.matched }}
     steps:
       - uses: actions/setup-node@v4
         with:
@@ -83,6 +88,7 @@ jobs:
       - name: npm CLI для trusted publishing
         run: npm install --global "npm@^11.5.1"
       - name: обменять OIDC-токен (без окружения)
+        id: exchange
         env:
           PACKAGE: ${{ inputs.package || 'srezai-cli' }}
           CHECK_ENV: none
@@ -90,24 +96,28 @@ jobs:
           set -euo pipefail
           test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || { echo "× нет OIDC-переменных (permissions)"; exit 1; }
           node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs'
+          const env = process.env.CHECK_ENV || '(none)'
+          const pkg = process.env.PACKAGE || 'srezai-cli'
+          const mark = (ok) => appendFileSync(process.env.GITHUB_OUTPUT, `matched=${ok ? 'true' : 'false'}\n`)
           const requestUrl = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL)
           requestUrl.searchParams.append('audience', 'npm:registry.npmjs.org')
           const r = await fetch(requestUrl, {
             headers: { Accept: 'application/json', Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
           })
           const { value: idToken } = await r.json()
-          if (!idToken) { console.log('× GitHub не выдал id_token'); process.exit(1) }
-          const pkg = process.env.PACKAGE || 'srezai-cli'
+          if (!idToken) { console.log('× GitHub не выдал id_token'); mark(false); process.exit(0) }
           const ex = await fetch(`https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${encodeURIComponent(pkg)}`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${idToken}` },
           })
           const body = await ex.text()
-          console.log(`CHECK_ENV=${process.env.CHECK_ENV || '(none)'} PACKAGE=${pkg} exchange HTTP ${ex.status}`)
+          console.log(`CHECK_ENV=${env} PACKAGE=${pkg} exchange HTTP ${ex.status}`)
           try { const j = JSON.parse(body); console.log(JSON.stringify({ ...j, token: j.token ? '***' : undefined })) }
           catch { console.log(body.slice(0, 500)) }
-          if (ex.status !== 200) { console.log(`× нет совпадения для ${pkg} (без окружения)`); process.exit(1) }
-          console.log(`✓ публикатор найден для ${pkg} (без окружения)`)
+          if (ex.status === 200) console.log(`✓ публикатор найден для ${pkg} (environment: ${env})`)
+          else console.log(`× нет совпадения для ${pkg} (environment: ${env})`)
+          mark(ex.status === 200)
           JS
 
   verdict:
@@ -118,10 +128,13 @@ jobs:
     steps:
       - name: какой вариант совпал
         run: |
-          echo "с окружением npm: ${{ needs.with-env.result }}"
-          echo "без окружения:    ${{ needs.no-env.result }}"
-          if [ "${{ needs.with-env.result }}" = "success" ] || [ "${{ needs.no-env.result }}" = "success" ]; then
+          echo "с окружением npm (matched): ${{ needs.with-env.outputs.matched }}"
+          echo "без окружения (matched):    ${{ needs.no-env.outputs.matched }}"
+          if [ "${{ needs.with-env.outputs.matched }}" = "true" ] || [ "${{ needs.no-env.outputs.matched }}" = "true" ]; then
             echo "✓ доверенный публикатор найден — можно выпускать релиз"
+            if [ "${{ needs.with-env.outputs.matched }}" != "true" ]; then
+              echo "  ВАЖНО: совпал вариант без окружения — в release.yml уберите строку 'environment: npm'."
+            fi
             exit 0
           fi
           echo "× npm не знает доверенного публикатора для srezai-cli («package not found»)"
