@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -73,4 +74,25 @@ test("file:// и не-http схемы отбиваются до сети", () =>
 test("неизвестная команда — код 2", () => {
   const r = run(["totally-unknown"]);
   assert.equal(r.code, 2);
+});
+
+test("в исходнике CLI нет исполнения внешних команд (shell-инъекции невозможны)", () => {
+  const source = readFileSync(CLI, "utf8");
+  for (const pattern of ["child_process", "execSync", "exec(", "spawnSync", "spawn(", "eval("]) {
+    assert.ok(!source.includes(pattern), `найдено «${pattern}» — CLI не должен исполнять команды`);
+  }
+});
+
+test("лимит размера ответа и маска ключа зашиты в код", () => {
+  const source = readFileSync(CLI, "utf8");
+  assert.match(source, /MAX_BODY_BYTES/);
+  assert.match(source, /srz_…/);
+});
+
+test("аргументы с shell-метасимволами не исполняются, а трактуются как текст", () => {
+  // «Опасная» строка уходит в JSON-тело как данные; проверяем, что CLI не создал файл.
+  const marker = "/tmp/srezai-cli-injection-marker";
+  const r = run(["read", `https://example.com/"$(touch ${marker})"`], { SREZAI_CLI_DEV: "1", SREZAI_DEV_BASE_URL: "http://127.0.0.1:1" });
+  assert.notEqual(r.code, 0, "сеть должна быть недоступна в тесте");
+  assert.equal(existsSync(marker), false, "shell-команда из аргумента не должна выполниться");
 });
