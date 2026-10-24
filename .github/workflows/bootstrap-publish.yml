@@ -26,6 +26,9 @@ jobs:
   bootstrap:
     if: inputs.confirm == 'bootstrap'
     runs-on: ubuntu-latest
+    # environment npm: чтобы подошёл секрет, сохранённый как в репозитории,
+    # так и в окружении npm (у release.yml окружение уже указано).
+    environment: npm
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -36,7 +39,8 @@ jobs:
         run: npm install --global "npm@^11.5.1"
       - name: .npmrc из секрета NPM_TOKEN
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # допускаем три имени: человеческий фактор — секрет могли назвать иначе
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN || secrets.NPM_BOOTSTRAP_TOKEN || secrets.NPM_PUBLISH_TOKEN }}
         run: |
           if [ -z "$NODE_AUTH_TOKEN" ]; then
             echo "× нет секрета NPM_TOKEN (Settings → Secrets and variables → Actions)"
