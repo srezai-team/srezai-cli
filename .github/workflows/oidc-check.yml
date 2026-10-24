@@ -5,6 +5,12 @@ name: oidc-check
 # Запуск: Actions → oidc-check → Run workflow (ref: main).
 on:
   workflow_dispatch:
+    inputs:
+      package:
+        description: "Имя пакета npm для проверки (по умолчанию srezai-cli)"
+        required: false
+        default: "srezai-cli"
+        type: string
 
 permissions:
   contents: read
@@ -25,6 +31,8 @@ jobs:
       - name: npm CLI для trusted publishing
         run: npm install --global "npm@^11.5.1"
       - name: обменять OIDC-токен на publish-токен npm
+        env:
+          PACKAGE: ${{ inputs.package || 'srezai-cli' }}
         run: |
           set -euo pipefail
           test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || { echo "× нет OIDC-переменных (permissions)"; exit 1; }
@@ -36,7 +44,8 @@ jobs:
           })
           const { value: idToken } = await r.json()
           if (!idToken) { console.log('× GitHub не выдал id_token'); process.exit(1) }
-          const ex = await fetch('https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/srezai-cli', {
+          const pkg = process.env.PACKAGE || 'srezai-cli'
+          const ex = await fetch(`https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${encodeURIComponent(pkg)}`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${idToken}` },
           })
@@ -44,6 +53,6 @@ jobs:
           console.log(`exchange HTTP ${ex.status}`)
           try { const j = JSON.parse(body); console.log(JSON.stringify({ ...j, token: j.token ? '***' : undefined })) }
           catch { console.log(body.slice(0, 500)) }
-          if (ex.status !== 200) { console.log('× npm не знает доверенного публикатора для srezai-cli'); process.exit(1) }
-          console.log('✓ доверенный публикатор найден — можно выпускать релиз')
+          if (ex.status !== 200) { console.log(`× npm не знает доверенного публикатора для ${pkg}`); process.exit(1) }
+          console.log(`✓ доверенный публикатор найден для ${pkg} — можно выпускать релиз`)
           JS
