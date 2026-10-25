@@ -24,7 +24,7 @@ jobs:
       contents: read
       id-token: write # дублируем на уровне job: environment не должен «съесть» право
     outputs:
-      published: ${{ steps.publish.outputs.published }}
+      published: ${{ steps.publish.outputs.published || steps.already.outputs.published }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -54,8 +54,21 @@ jobs:
           version="$(npm --version)"
           echo "npm $version"
           printf '11.5.1\n%s\n' "$version" | sort -V -C || { echo "нужен npm >= 11.5.1"; exit 1; }
+      - name: проверить, не опубликована ли версия уже (повторный запуск)
+        id: check
+        run: |
+          version="$(npm view srezai-cli version 2>/dev/null || true)"
+          echo "в npm сейчас: ${version:-<нет>}"
+          if [ "$version" = "0.1.0" ]; then echo "already=true" >> "$GITHUB_OUTPUT"; else echo "already=false" >> "$GITHUB_OUTPUT"; fi
+      - name: версия уже в npm — публикацию пропускаем
+        id: already
+        if: steps.check.outputs.already == 'true'
+        run: |
+          echo "published=true" >> "$GITHUB_OUTPUT"
+          echo "✓ srezai-cli@0.1.0 уже опубликована, повторная публикация не нужна"
       - name: "npm publish (с environment: npm)"
         id: publish
+        if: steps.check.outputs.already != 'true'
         continue-on-error: true
         run: |
           set +e
@@ -82,7 +95,7 @@ jobs:
       contents: read
       id-token: write
     outputs:
-      published: ${{ steps.publish.outputs.published }}
+      published: ${{ steps.publish.outputs.published || steps.already.outputs.published }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -95,8 +108,21 @@ jobs:
           rm -f "$HOME/.npmrc"
       - name: npm CLI для trusted publishing
         run: npm install --global "npm@^11.5.1"
+      - name: проверить, не опубликована ли версия уже
+        id: check
+        run: |
+          version="$(npm view srezai-cli version 2>/dev/null || true)"
+          echo "в npm сейчас: ${version:-<нет>}"
+          if [ "$version" = "0.1.0" ]; then echo "already=true" >> "$GITHUB_OUTPUT"; else echo "already=false" >> "$GITHUB_OUTPUT"; fi
+      - name: версия уже в npm — публикацию пропускаем
+        id: already
+        if: steps.check.outputs.already == 'true'
+        run: |
+          echo "published=true" >> "$GITHUB_OUTPUT"
+          echo "✓ версия уже опубликована"
       - name: npm publish (без environment)
         id: publish
+        if: steps.check.outputs.already != 'true'
         continue-on-error: true
         run: |
           set +e
@@ -123,19 +149,27 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: пакет и версия в npm
+      - name: пакет и версия в npm (реестру нужно время после публикации)
         run: |
           set -euo pipefail
-          version="$(npm view srezai-cli version 2>/dev/null || true)"
-          echo "npm view srezai-cli version = ${version:-<нет>}"
-          [ "$version" = "0.1.0" ] || { echo "× в npm нет srezai-cli@0.1.0"; exit 1; }
-          echo "✓ srezai-cli@0.1.0 в npm"
-      - name: provenance-аттестация
+          for i in $(seq 1 12); do
+            version="$(npm view srezai-cli version 2>/dev/null || true)"
+            echo "попытка $i: ${version:-<нет>}"
+            [ "$version" = "0.1.0" ] && { echo "✓ srezai-cli@0.1.0 в npm"; exit 0; }
+            sleep 10
+          done
+          echo "× в npm нет srezai-cli@0.1.0"
+          exit 1
+      - name: provenance-аттестация (с ожиданием)
         run: |
           set -euo pipefail
-          attest="$(npm view srezai-cli@0.1.0 dist.attestations --json 2>/dev/null || echo null)"
-          echo "$attest"
-          [ "$attest" != "null" ] && [ -n "$attest" ] || { echo "× у версии нет provenance-аттестации"; exit 1; }
+          for i in $(seq 1 6); do
+            attest="$(npm view srezai-cli@0.1.0 dist.attestations --json 2>/dev/null || echo null)"
+            if [ "$attest" != "null" ] && [ -n "$attest" ]; then echo "✓ provenance есть: $attest"; exit 0; fi
+            echo "попытка $i: аттестации пока нет"; sleep 10
+          done
+          echo "× у версии нет provenance-аттестации"
+          exit 1
       - name: ноль зависимостей
         run: |
           node -e '
