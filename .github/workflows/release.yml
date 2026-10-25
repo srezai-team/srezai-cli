@@ -189,6 +189,9 @@ jobs:
   # публикация токеном read-only, а на создание релиза нужно contents: write.
   github-release:
     needs: verify
+    # Явное условие: без него GitHub пропускал job, хотя verify был зелёным
+    # (проверено 25.10.2026 на трёх запусках).
+    if: always() && needs.verify.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
