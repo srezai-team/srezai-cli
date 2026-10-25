@@ -11,8 +11,11 @@ on:
       - "v*"
   workflow_dispatch: # повторная попытка без пересоздания тега (re-run тоже работает)
 
+# contents: write нужен только job github-release, но права задаём на уровне
+# workflow: при default_workflow_permissions=read job-уровневый override
+# приводил к тому, что job молча пропускался (проверено 25.10.2026).
 permissions:
-  contents: read
+  contents: write
   id-token: write # обязательно для OIDC
 
 jobs:
@@ -187,8 +190,6 @@ jobs:
   github-release:
     needs: verify
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: GitHub Release из тега
