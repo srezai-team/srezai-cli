@@ -33,7 +33,6 @@ jobs:
           # registry-url НЕ задаём: setup-node@v4 подставляет фиктивный
           # NODE_AUTH_TOKEN, npm уходит в токен-аутентификацию вместо OIDC
           # и получает 404 на PUT (проверено 24.10.2026).
-          package-manager-cache: false
       - name: Убедиться, что токен-аутентификации нет (только OIDC)
         run: |
           if [ -n "${NODE_AUTH_TOKEN:-}" ]; then echo "NODE_AUTH_TOKEN был задан — снимаю"; fi
@@ -89,7 +88,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          package-manager-cache: false
       - name: Убедиться, что токен-аутентификации нет (только OIDC)
         run: |
           echo "NODE_AUTH_TOKEN=" >> "$GITHUB_ENV"
@@ -125,7 +123,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          package-manager-cache: false
       - name: пакет и версия в npm
         run: |
           set -euo pipefail

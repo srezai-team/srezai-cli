@@ -34,7 +34,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          package-manager-cache: false
       - name: npm CLI для публикации
         run: npm install --global "npm@^11.5.1"
       - name: .npmrc из секрета NPM_TOKEN
@@ -52,8 +51,18 @@ jobs:
         run: |
           node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json","utf8"));p.version="0.0.1";fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n");console.log("version -> 0.0.1 (только в CI, не коммитим)")'
           npm publish --access public --loglevel verbose
-      - name: проверить, что пакет появился
+      - name: проверить, что пакет появился (реестру нужно время)
         run: |
-          version="$(npm view srezai-cli version)"
-          echo "npm: srezai-cli@$version"
-          [ "$version" = "0.0.1" ] || { echo "× ожидали 0.0.1"; exit 1; }
+          # npm отвечает «being processed and may take a few minutes»: сразу после
+          # публикации registry может ещё отдавать 404, поэтому ждём до 3 минут.
+          for i in $(seq 1 18); do
+            version="$(npm view srezai-cli version 2>/dev/null || true)"
+            echo "попытка $i: ${version:-ещё не виден}"
+            if [ "$version" = "0.0.1" ]; then
+              echo "✓ npm: srezai-cli@0.0.1"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "× пакет не появился за 3 минуты"
+          exit 1
