@@ -26,7 +26,14 @@
     "cli",
     "scraping",
     "russian-web",
-    "srezai"
+    "srezai",
+    "claude-code",
+    "cursor",
+    "codex",
+    "llm",
+    "deep-research",
+    "web-access",
+    "agent-tools"
   ],
   "author": "srezai",
   "license": "Apache-2.0",
