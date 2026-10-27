@@ -20,6 +20,8 @@
 | `media` | `POST /api/v1/media` | query, num, safe, timeRange |
 | `register` | `POST /api/v1/auth/quick-register` | email |
 | `whoami` | — (локально) | — |
+| `setup skills` | — (локально) | — |
+| `setup defaults` | — (локально) | — |
 
 ## Коды ошибок и exit codes
 

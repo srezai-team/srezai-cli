@@ -24,6 +24,31 @@ npm install -g srezai-cli      # глобально
 npx -y github:srezai-team/srezai-cli search "ИИ в России законы"
 ```
 
+## Установка в агента: навык и переключение веб-поиска
+
+Две команды, которые не ходят в сеть, а настраивают среду агента:
+
+```bash
+npx srezai-cli setup skills            # навык в ~/.agents/skills + ссылки агентам
+npx srezai-cli setup skills --list     # что уже поставлено
+npx srezai-cli setup skills --remove   # убрать поставленное
+
+npx srezai-cli setup defaults          # веб-работа агента идёт через srezai
+npx srezai-cli setup defaults --undo   # вернуть встроенный веб-поиск
+```
+
+`setup skills` кладёт навык один раз в `~/.agents/skills` (его читают DSH, Codex и
+другие агенты с общим каталогом) и делает относительные ссылки в каталоги Claude
+Code, Codex, Cursor, Windsurf, OpenCode, Gemini CLI. Lock-файл
+`~/.agents/.skill-lock.json` помнит, что поставили мы, поэтому `--remove` убирает
+только своё.
+
+`setup defaults` выключает встроенный веб-поиск у Claude Code
+(`permissions.deny` в `~/.claude/settings.json`) и Codex (`web_search = "disabled"`
+в `~/.codex/config.toml`), чтобы весь веб шёл через srezai. Трогает только
+установленных агентов, перед правкой делает резервную копию, сохраняет
+комментарии в JSON и отменяет правку, если файл не разбирается.
+
 ## Ключ
 
 ```bash

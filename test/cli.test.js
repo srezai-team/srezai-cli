@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -169,4 +169,101 @@ test("версия в bin совпадает с package.json", () => {
   const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
   const source = readFileSync(CLI, "utf8");
   assert.match(source, new RegExp(`const VERSION = "${pkg.version.replace(/\./g, "\\.")}"`));
+});
+
+// ---------- setup: навык и переключение веб-провайдера ----------
+// Работаем во временном каталоге (--home), настоящие конфиги не трогаются.
+
+function tempHome() {
+  const dir = join(process.env.TMPDIR || "/tmp", `srezai-cli-home-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+test("setup defaults: --dry-run ничего не пишет, --json показывает план", () => {
+  const home = tempHome();
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  const r = run(["setup", "defaults", "--home", home, "--dry-run"]);
+  assert.equal(r.code, 0);
+  const payload = JSON.parse(r.stdout);
+  assert.equal(payload.dryRun, true);
+  assert.equal(payload.results[0].changed, true);
+  assert.equal(existsSync(join(home, ".claude/settings.json")), false, "dry-run не должен создавать файл");
+});
+
+test("setup defaults: правка Claude Code, повтор идемпотентен, --undo снимает", () => {
+  const home = tempHome();
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  // Без комментариев: файл переписывается целиком.
+  const applied = run(["setup", "defaults", "--home", home, "--agent", "claude-code"]);
+  assert.equal(applied.code, 0);
+  const settings = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8"));
+  assert.deepEqual(settings.permissions.deny, ["WebSearch", "WebFetch"]);
+
+  const again = run(["setup", "defaults", "--home", home, "--agent", "claude-code"]);
+  assert.equal(JSON.parse(again.stdout).results[0].changed, false);
+
+  const undone = run(["setup", "defaults", "--home", home, "--agent", "claude-code", "--undo"]);
+  assert.equal(undone.code, 0);
+  assert.deepEqual(JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")).permissions.deny, []);
+});
+
+test("setup defaults: комментарии в JSON сохраняются, старые правила не теряются", () => {
+  const home = tempHome();
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(
+    join(home, ".claude/settings.json"),
+    `{\n  // моя пометка\n  "permissions": { "allow": ["Bash"], "deny": ["Bash(git push:*)"] }\n}\n`,
+  );
+  const r = run(["setup", "defaults", "--home", home, "--agent", "claude-code"]);
+  assert.equal(r.code, 0);
+  const text = readFileSync(join(home, ".claude/settings.json"), "utf8");
+  assert.match(text, /моя пометка/, "комментарий должен остаться");
+  const clean = text.replace(/(^|[^:\\])\/\/.*$/gm, "$1");
+  const config = JSON.parse(clean);
+  assert.deepEqual(config.permissions.allow, ["Bash"]);
+  assert.deepEqual(config.permissions.deny, ["Bash(git push:*)", "WebSearch", "WebFetch"]);
+});
+
+test("setup defaults: Codex — строка в корне, секции не ломаются, --undo убирает", () => {
+  const home = tempHome();
+  mkdirSync(join(home, ".codex"), { recursive: true });
+  writeFileSync(join(home, ".codex/config.toml"), 'model = "o3"\n\n[mcp_servers.srezai]\nurl = "https://srezai.ru/api/mcp"\n');
+  const r = run(["setup", "defaults", "--home", home, "--agent", "codex"]);
+  assert.equal(r.code, 0);
+  const lines = readFileSync(join(home, ".codex/config.toml"), "utf8").split("\n");
+  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  assert.ok(lines.slice(0, firstTable).includes('web_search = "disabled"'), "строка должна быть в корне");
+  const undone = run(["setup", "defaults", "--home", home, "--agent", "codex", "--undo"]);
+  assert.equal(undone.code, 0);
+  assert.doesNotMatch(readFileSync(join(home, ".codex/config.toml"), "utf8"), /web_search/);
+});
+
+test("setup skills: канон + ссылка в агента + lock, повтор и --remove", () => {
+  const home = tempHome();
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  const source = join(home, "source-skills");
+  mkdirSync(join(source, "demo"), { recursive: true });
+  writeFileSync(join(source, "demo/SKILL.md"), "---\nname: demo\ndescription: тест\n---\n");
+
+  const installed = run(["setup", "skills", "--home", home, "--source", source]);
+  assert.equal(installed.code, 0);
+  assert.ok(existsSync(join(home, ".agents/skills/demo/SKILL.md")), "навык должен лежать в каноне");
+  const link = join(home, ".claude/skills/demo");
+  assert.ok(lstatSync(link).isSymbolicLink(), "в каталоге агента должна быть ссылка");
+  const lock = JSON.parse(readFileSync(join(home, ".agents/.skill-lock.json"), "utf8"));
+  assert.deepEqual(Object.keys(lock.skills), ["demo"]);
+
+  const listed = run(["setup", "skills", "--home", home, "--list"]);
+  assert.match(listed.stdout, /demo/);
+
+  const removed = run(["setup", "skills", "--home", home, "--remove"]);
+  assert.equal(removed.code, 0);
+  assert.equal(existsSync(join(home, ".agents/skills/demo")), false);
+  assert.equal(existsSync(link), false);
+});
+
+test("--help знает про setup", () => {
+  const r = run(["--help"]);
+  assert.match(r.stdout, /srezai setup/);
 });

@@ -15,9 +15,23 @@
 //   5. Ноль зависимостей: подпроцессов, eval и сетевых хостов, кроме API, нет.
 
 import process from "node:process";
-import { readFileSync, statSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const VERSION = "0.1.0";
 
@@ -232,6 +246,11 @@ const BOOLEAN_FLAGS = new Set([
   "safe",
   "webmcp",
   "async",
+  "list",
+  "remove",
+  "undo",
+  "dry-run",
+  "force",
 ]);
 
 function setFlag(flags, name, value) {
@@ -277,6 +296,401 @@ function compact(object) {
   const out = {};
   for (const [k, v] of Object.entries(object)) if (v !== undefined) out[k] = v;
   return out;
+}
+
+// ---------- setup: навык для агента и переключение веб-провайдера ----------
+//
+// Исключение из правила «CLI не читает локальные файлы»: эти две команды по
+// явному запросу человека правят ЕГО ЖЕ конфиги агентов (~/.claude, ~/.codex) и
+// каталог навыков (~/.agents). Пути фиксированы, содержимое наружу не уходит,
+// любая правка делается с резервной копией, а при сомнении отменяется целиком.
+
+const SETUP_AGENT_TARGETS = [
+  { name: "claude-code", label: "Claude Code", skillsDir: ".claude/skills", detectDir: ".claude" },
+  { name: "codex", label: "Codex", skillsDir: ".codex/skills", detectDir: ".codex" },
+  { name: "cursor", label: "Cursor", skillsDir: ".cursor/skills", detectDir: ".cursor" },
+  { name: "windsurf", label: "Windsurf", skillsDir: ".codeium/windsurf/skills", detectDir: ".codeium/windsurf" },
+  { name: "opencode", label: "OpenCode", skillsDir: ".config/opencode/skills", detectDir: ".config/opencode" },
+  { name: "gemini-cli", label: "Gemini CLI", skillsDir: ".gemini/skills", detectDir: ".gemini" },
+];
+const SETUP_CANONICAL = ".agents/skills";
+const SETUP_LOCK = ".agents/.skill-lock.json";
+const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const CLAUDE_TOOLS = ["WebSearch", "WebFetch"];
+const CODEX_LINE = 'web_search = "disabled"';
+
+function setupHome(flags) {
+  const override = flags.home ? String(flags.home) : process.env.SREZAI_CLI_HOME;
+  return override && override.trim() ? resolve(override) : homedir();
+}
+
+// JSONC: комментарии заменяем пробелами, длина строки не меняется — позиции из
+// «очищенной» строки годятся для исходной, комментарии в файле остаются.
+function stripJsonComments(text) {
+  let out = "";
+  let inString = false;
+  let quote = "";
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      out += ch;
+      if (ch === "\\") { out += text[i + 1] ?? ""; i += 1; continue; }
+      if (ch === quote) inString = false;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { inString = true; quote = ch; out += ch; continue; }
+    if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") { out += " "; i += 1; }
+      i -= 1;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      out += "  ";
+      i += 2;
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) {
+        out += text[i] === "\n" ? "\n" : " ";
+        i += 1;
+      }
+      if (i < text.length) { out += "  "; i += 1; }
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function jsonFindKeyValueStart(stripped, key) {
+  const needle = `"${key}"`;
+  let from = 0;
+  for (;;) {
+    const keyPos = stripped.indexOf(needle, from);
+    if (keyPos === -1) return -1;
+    let i = keyPos + needle.length;
+    while (i < stripped.length && /\s/.test(stripped[i])) i += 1;
+    if (stripped[i] === ":") {
+      i += 1;
+      while (i < stripped.length && /\s/.test(stripped[i])) i += 1;
+      return i;
+    }
+    from = keyPos + needle.length;
+  }
+}
+
+function jsonMatchBracket(text, openIndex) {
+  const open = text[openIndex];
+  const close = open === "{" ? "}" : "]";
+  let depth = 0;
+  let inString = false;
+  let quote = "";
+  for (let i = openIndex; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") { i += 1; continue; }
+      if (ch === quote) inString = false;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { inString = true; quote = ch; continue; }
+    if (ch === open) depth += 1;
+    else if (ch === close) { depth -= 1; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
+function jsonValueEnd(text, start) {
+  const ch = text[start];
+  if (ch === "{" || ch === "[") return jsonMatchBracket(text, start) + 1;
+  if (ch === '"') {
+    for (let i = start + 1; i < text.length; i += 1) {
+      if (text[i] === "\\") { i += 1; continue; }
+      if (text[i] === '"') return i + 1;
+    }
+    return -1;
+  }
+  let i = start;
+  while (i < text.length && !/[,}\]\n]/.test(text[i])) i += 1;
+  return i;
+}
+
+function jsonInsertAfterBrace(text, braceIndex, key, valueJson) {
+  return `${text.slice(0, braceIndex + 1)}\n    "${key}": ${valueJson},${text.slice(braceIndex + 1)}`;
+}
+
+function jsonVerify(text, expected) {
+  try {
+    return JSON.stringify(JSON.parse(stripJsonComments(text))) === JSON.stringify(expected);
+  } catch {
+    return false;
+  }
+}
+
+function setupBackup(file) {
+  if (!existsSync(file)) return;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  copyFileSync(file, `${file}.srezai-backup-${stamp}`);
+}
+
+function planClaudeDefaults(home, undo) {
+  const file = join(home, ".claude", "settings.json");
+  const existing = existsSync(file) ? readFileSync(file, "utf8") : null;
+  const text = existing ?? "{\n}\n";
+  const stripped = stripJsonComments(text);
+  let config;
+  try {
+    config = JSON.parse(stripped);
+  } catch {
+    return { file, skipped: true, reason: "settings.json не разбирается как JSON — не трогаем" };
+  }
+  const permissions = config.permissions && typeof config.permissions === "object" ? config.permissions : {};
+  const deny = Array.isArray(permissions.deny) ? permissions.deny.filter((x) => typeof x === "string") : [];
+  const denySet = new Set(deny);
+  const nextDeny = undo
+    ? deny.filter((tool) => !CLAUDE_TOOLS.includes(tool))
+    : [...deny, ...CLAUDE_TOOLS.filter((tool) => !denySet.has(tool))];
+  const changed = JSON.stringify(nextDeny) !== JSON.stringify(deny);
+  if (!changed) return { file, changed: false, message: undo ? "уже включено" : "уже выключено" };
+
+  const nextConfig = { ...config, permissions: { ...permissions, deny: nextDeny } };
+  let nextText;
+  if (!(stripJsonComments(text) !== text)) {
+    nextText = `${JSON.stringify(nextConfig, null, 2)}\n`;
+  } else {
+    const permissionsStart = jsonFindKeyValueStart(stripped, "permissions");
+    if (permissionsStart === -1) {
+      const rootBrace = stripped.search(/\{/);
+      nextText = jsonInsertAfterBrace(text, rootBrace, "permissions", JSON.stringify({ deny: nextDeny }));
+    } else {
+      const permissionsClose = jsonMatchBracket(stripped, permissionsStart);
+      const denyStart = jsonFindKeyValueStart(stripped, "deny");
+      const denyInside = denyStart > permissionsStart && denyStart < permissionsClose;
+      if (denyInside) {
+        const denyEnd = jsonValueEnd(stripped, denyStart);
+        nextText = text.slice(0, denyStart) + JSON.stringify(nextDeny) + text.slice(denyEnd);
+      } else {
+        nextText = jsonInsertAfterBrace(text, permissionsStart, "deny", JSON.stringify(nextDeny));
+      }
+    }
+    if (!jsonVerify(nextText, nextConfig)) {
+      return { file, skipped: true, reason: "не удалось аккуратно поправить JSON с комментариями — правка отменена" };
+    }
+  }
+  return { file, changed: true, text: nextText, message: undo ? "включим встроенный поиск" : "выключим встроенный поиск" };
+}
+
+function planCodexDefaults(home, undo) {
+  const file = join(home, ".codex", "config.toml");
+  const existing = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const lines = existing.split(/\r?\n/);
+  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  const nextLines = [...lines];
+  let lineIndex = -1;
+  for (let i = 0; i < rootEnd; i += 1) {
+    if (/^\s*web_search\s*=/.test(lines[i])) { lineIndex = i; break; }
+  }
+  let changed = false;
+  if (undo) {
+    if (lineIndex !== -1 && /^web_search\s*=\s*["']disabled["']\s*(#.*)?$/.test(lines[lineIndex].trim())) {
+      nextLines.splice(lineIndex, 1);
+      changed = true;
+    }
+  } else if (lineIndex === -1) {
+    nextLines.splice(rootEnd, 0, CODEX_LINE);
+    changed = true;
+  } else if (lines[lineIndex].trim() !== CODEX_LINE) {
+    nextLines[lineIndex] = CODEX_LINE;
+    changed = true;
+  }
+  return { file, changed, text: nextLines.join("\n"), message: changed ? (undo ? "включим встроенный поиск" : "выключим встроенный поиск") : undo ? "уже включено" : "уже выключено" };
+}
+
+function applySetupPlan(plan, dryRun) {
+  if (plan.skipped || !plan.changed) return plan;
+  if (!dryRun) {
+    mkdirSync(dirname(plan.file), { recursive: true });
+    setupBackup(plan.file);
+    writeFileSync(plan.file, plan.text, "utf8");
+  }
+  return plan;
+}
+
+function setupAgents(home, name) {
+  const wanted = String(name || "all").toLowerCase();
+  if (wanted === "all") {
+    return SETUP_AGENT_TARGETS.filter((agent) => existsSync(join(home, agent.detectDir)));
+  }
+  const found = SETUP_AGENT_TARGETS.find((agent) => agent.name === wanted);
+  if (!found) {
+    throw new CliError(`Неизвестный агент «${name}». Известны: ${SETUP_AGENT_TARGETS.map((a) => a.name).join(", ")}, all.`, { exit: EXIT.usage });
+  }
+  return [found];
+}
+
+function setupReadLock(home) {
+  const file = join(home, SETUP_LOCK);
+  try {
+    const data = JSON.parse(readFileSync(file, "utf8"));
+    return { version: data.version ?? 1, skills: data.skills ?? {} };
+  } catch {
+    return { version: 1, skills: {} };
+  }
+}
+
+function setupDiscoverSkills(sourceDir) {
+  if (!existsSync(sourceDir)) throw new CliError(`Каталог навыков не найден: ${sourceDir}`, { exit: EXIT.usage });
+  return readdirSync(sourceDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(sourceDir, entry.name, "SKILL.md")))
+    .map((entry) => entry.name)
+    .sort();
+}
+
+function setupCopyDir(from, to) {
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const src = join(from, entry.name);
+    const dst = join(to, entry.name);
+    if (entry.isDirectory()) setupCopyDir(src, dst);
+    else if (entry.isSymbolicLink()) symlinkSync(readlinkSync(src), dst);
+    else copyFileSync(src, dst);
+  }
+}
+
+function setupLinkSkill(home, agent, skillName, canonicalDir, dryRun, force) {
+  const linkPath = join(home, agent.skillsDir, skillName);
+  const target = relative(dirname(linkPath), join(canonicalDir, skillName));
+  let existing = null;
+  try {
+    existing = lstatSync(linkPath);
+  } catch {
+    existing = null;
+  }
+  if (existing) {
+    if (existing.isSymbolicLink()) {
+      if (readlinkSync(linkPath) === target) return { agent: agent.name, status: "already" };
+      if (!force) return { agent: agent.name, status: "skipped", reason: "на месте ссылки чужой файл" };
+      if (!dryRun) unlinkSync(linkPath);
+    } else if (!force) {
+      return { agent: agent.name, status: "skipped", reason: "на месте ссылки настоящий файл (--force перезапишет)" };
+    } else if (!dryRun) {
+      rmSync(linkPath, { recursive: true, force: true });
+    }
+  }
+  if (!dryRun) {
+    mkdirSync(dirname(linkPath), { recursive: true });
+    symlinkSync(target, linkPath);
+  }
+  return { agent: agent.name, status: "linked" };
+}
+
+function setupSkills(home, flags, dryRun) {
+  const canonicalDir = join(home, SETUP_CANONICAL);
+  const lock = setupReadLock(home);
+
+  if (flags.list) {
+    return {
+      canonicalDir,
+      detectedAgents: setupAgents(home, "all").map((agent) => agent.name),
+      skills: Object.entries(lock.skills).map(([name, info]) => ({ name, source: info.source, agents: info.agents ?? [] })),
+      text: Object.keys(lock.skills).length
+        ? Object.entries(lock.skills).map(([name, info]) => `${name} — ${info.source} → ${(info.agents ?? []).join(", ") || "без ссылок"}`).join("\n")
+        : `Навыков srezai нет (канон: ${canonicalDir}).`,
+    };
+  }
+
+  if (flags.remove) {
+    const removed = [];
+    for (const [name, info] of Object.entries(lock.skills)) {
+      for (const agentName of info.agents ?? []) {
+        const agent = SETUP_AGENT_TARGETS.find((item) => item.name === agentName);
+        if (!agent) continue;
+        const linkPath = join(home, agent.skillsDir, name);
+        try {
+          if (lstatSync(linkPath).isSymbolicLink() && readlinkSync(linkPath).includes(".agents")) {
+            if (!dryRun) unlinkSync(linkPath);
+            removed.push(`${agentName}/${name}`);
+          }
+        } catch {
+          // ссылки уже нет — норм
+        }
+      }
+      const skillDir = join(canonicalDir, name);
+      if (existsSync(skillDir)) {
+        if (!dryRun) rmSync(skillDir, { recursive: true, force: true });
+        removed.push(name);
+      }
+    }
+    if (!dryRun) rmSync(join(home, SETUP_LOCK), { force: true });
+    return { removed, text: removed.length ? `Убрано: ${removed.join(", ")}` : "Убирать нечего." };
+  }
+
+  const source = flags.source ? resolve(String(flags.source)) : join(PACKAGE_ROOT, "skills");
+  const skills = setupDiscoverSkills(source);
+  if (!skills.length) throw new CliError(`В ${source} нет каталогов с SKILL.md.`, { exit: EXIT.usage });
+  if (!dryRun) mkdirSync(canonicalDir, { recursive: true });
+  const agents = setupAgents(home, flags.agent);
+  const installed = [];
+  for (const name of skills) {
+    const dest = join(canonicalDir, name);
+    const known = Boolean(lock.skills[name]);
+    if (existsSync(dest) && !known && !flags.force) {
+      installed.push({ name, status: "skipped", reason: "уже есть, но поставлен не нами (--force перезапишет)" });
+      continue;
+    }
+    if (!dryRun) {
+      rmSync(dest, { recursive: true, force: true });
+      setupCopyDir(join(source, name), dest);
+    }
+    const links = agents.map((agent) => setupLinkSkill(home, agent, name, canonicalDir, dryRun, flags.force));
+    lock.skills[name] = { source: join(source, name), installedAt: new Date().toISOString(), agents: agents.map((agent) => agent.name) };
+    installed.push({ name, status: "installed", links });
+  }
+  if (!dryRun) {
+    mkdirSync(dirname(join(home, SETUP_LOCK)), { recursive: true });
+    writeFileSync(join(home, SETUP_LOCK), `${JSON.stringify({ version: 1, updatedAt: new Date().toISOString(), skills: lock.skills }, null, 2)}\n`, "utf8");
+  }
+  return {
+    canonicalDir,
+    agents: agents.map((agent) => agent.name),
+    installed,
+    text: installed.map((item) => item.status === "skipped" ? `${item.name}: пропущен — ${item.reason}` : `${item.name}: ${dryRun ? "будет поставлен" : "поставлен"} в ${canonicalDir}`).join("\n"),
+  };
+}
+
+function setupDefaults(home, flags, dryRun) {
+  const undo = Boolean(flags.undo);
+  const wanted = String(flags.agent || "all");
+  // «all» — только установленные агенты: создавать настройки тому, кого нет на
+  // машине, бессмысленно. Явный --agent действует всегда.
+  const detected = [
+    { name: "claude-code", dir: ".claude" },
+    { name: "codex", dir: ".codex" },
+  ].filter((target) => existsSync(join(home, target.dir)));
+  const names = wanted === "all" ? detected.map((target) => target.name) : [wanted];
+  if (wanted === "all" && !names.length) {
+    return { undo, dryRun, results: [], text: "Не нашли установленных Claude Code или Codex (нет каталогов ~/.claude и ~/.codex). Если агент в нестандартном месте: srezai setup defaults --agent claude-code" };
+  }
+  const results = [];
+  for (const name of names) {
+    const normalized = name === "claude" ? "claude-code" : name;
+    if (normalized === "claude-code") {
+      const plan = planClaudeDefaults(home, undo);
+      const applied = applySetupPlan(plan, dryRun);
+      results.push({ agent: "Claude Code", file: plan.file, changed: Boolean(applied.changed), skipped: Boolean(plan.skipped), reason: plan.reason, message: plan.message });
+    } else if (normalized === "codex") {
+      const plan = planCodexDefaults(home, undo);
+      const applied = applySetupPlan(plan, dryRun);
+      results.push({ agent: "Codex", file: plan.file, changed: Boolean(applied.changed), skipped: Boolean(plan.skipped), reason: plan.reason, message: plan.message });
+    } else {
+      throw new CliError(`setup defaults умеет claude-code, codex и all; получено «${name}».`, { exit: EXIT.usage });
+    }
+  }
+  return {
+    undo,
+    dryRun,
+    results,
+    text: results.map((item) => item.skipped
+      ? `${item.agent}: пропущено (${item.reason})`
+      : `${item.agent}: ${item.changed ? (dryRun ? "будет изменено" : "готово") : "без изменений"} — ${item.file}`).join("\n"),
+  };
 }
 
 // ---------- команды ----------
@@ -521,6 +935,22 @@ const COMMANDS = {
   },
 };
 COMMANDS["auth"] = COMMANDS.whoami;
+COMMANDS.setup = {
+  usage: "srezai setup skills|defaults [--agent <имя>] [--dry-run] [--undo|--remove|--list]",
+  summary:
+    "Установить навык srezai в ~/.agents/skills и связать с агентами (skills) или направить веб-работу агента в srezai, выключив встроенный поиск (defaults). Правки конфигов — только по этой команде, с резервной копией и откатом.",
+  run(positionals, flags) {
+    const sub = positionals[0];
+    if (!sub || sub === "help") {
+      return Promise.resolve({ text: "srezai setup skills|defaults [--agent <имя>] [--dry-run] [--undo|--remove|--list]" });
+    }
+    const home = setupHome(flags);
+    const dryRun = Boolean(flags["dry-run"]);
+    if (sub === "skills") return Promise.resolve(setupSkills(home, flags, dryRun));
+    if (sub === "defaults") return Promise.resolve(setupDefaults(home, flags, dryRun));
+    throw new CliError(`setup ${sub}: неизвестно. Доступно: skills, defaults.`, { exit: EXIT.usage });
+  },
+};
 
 function printHelp() {
   const lines = [

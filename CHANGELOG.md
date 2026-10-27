@@ -1,5 +1,18 @@
 # Changelog
 
+## Не выпущено
+
+- `setup skills` — навык `srezai-cli` ставится в `~/.agents/skills` и связывается
+  симлинками с Claude Code, Codex, Cursor, Windsurf, OpenCode, Gemini CLI;
+  lock-файл `~/.agents/.skill-lock.json`, `--list` и `--remove`.
+- `setup defaults` / `--undo` — выключает встроенный веб-поиск Claude Code
+  (`permissions.deny`) и Codex (`web_search = "disabled"`) и возвращает как было.
+  Резервная копия перед правкой, сохранение комментариев в JSONC, правка только
+  установленных агентов.
+- Навык `skills/srezai-cli/` (SKILL.md + rules) входит в пакет.
+- 6 новых тестов (всего 20): dry-run, идемпотентность, откат, JSONC-комментарии,
+  Codex-секции, установка/удаление навыка.
+
 ## 0.1.0 — 2026-10-24
 
 Первый релиз.
