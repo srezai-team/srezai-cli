@@ -57,6 +57,7 @@ srezai deep "сравни Exa и Tavily"            # вернёт id
 srezai deep status <id>
 srezai transcript https://youtu.be/… --languages ru --timestamps
 srezai media "схема метро Москвы" --num 3
+srezai status                                  # ключ, план, последний вызов
 ```
 
 Формат вывода — компактный JSON (агентам удобно парсить). Флаги `--pretty` —
@@ -78,6 +79,7 @@ JSON с отступами, `--human` — текст, если инструме�
 | `deep` | глубокое исследование | 20 + токены |
 | `transcript` | субтитры YouTube | 1 кредит |
 | `media` | поиск картинок | 1 кредит |
+| `status` | ключ, план, состояние ключа, последний вызов и цены; `--offline` — без сети | бесплатно |
 | `whoami` | локальная проверка ключа и хоста | бесплатно |
 
 1 кредит = 0,10 ₽. Актуальные цены — <https://srezai.ru/pricing>.

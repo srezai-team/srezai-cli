@@ -104,7 +104,7 @@ test("справка не врёт: значения --depth и состав к�
   assert.ok(!r.stdout.includes("basic|advanced"), "устаревшие значения depth в справке");
   for (const name of [
     "search", "read", "map", "crawl", "extract", "fetch", "verify",
-    "answer", "deep", "transcript", "media", "register", "whoami",
+    "answer", "deep", "transcript", "media", "register", "status", "whoami",
   ]) {
     assert.match(r.stdout, new RegExp(`srezai ${name}\\b`), `в справке нет команды ${name}`);
   }
@@ -163,6 +163,102 @@ test("CLI представляется серверу и помечает рег
   assert.equal(received.body.integration, "cli");
   assert.match(received.headers["x-srezai-skill"], /^srezai-cli\/\d+\.\d+\.\d+$/);
   assert.match(received.headers["user-agent"], /^srezai-cli\/\d+\.\d+\.\d+ \(node /);
+});
+
+test("status без ключа показывает пробный режим и не идёт в сеть", () => {
+  const r = run(["status"], { SREZAI_CLI_DEV: "1", SREZAI_DEV_BASE_URL: "http://127.0.0.1:1" });
+  assert.equal(r.code, 0);
+  const payload = JSON.parse(r.stdout);
+  assert.equal(payload.key.present, false);
+  assert.equal(payload.trial.requestsPerDay, 25);
+  assert.match(payload.nextAction, /register/);
+  assert.ok(!/network/.test(r.stderr), "без ключа не должно быть сетевой ошибки");
+});
+
+test("status --offline проверяет ключ без сети", () => {
+  const key = ["srz", "live", "abcdefgh1234"].join("_");
+  const r = run(["status", "--offline"], {
+    SREZAI_API_KEY: key,
+    SREZAI_CLI_DEV: "1",
+    SREZAI_DEV_BASE_URL: "http://127.0.0.1:1",
+  });
+  assert.equal(r.code, 0);
+  const payload = JSON.parse(r.stdout);
+  assert.equal(payload.key.present, true);
+  assert.equal(payload.key.masked, "srz_…1234");
+  assert.match(payload.nextAction, /offline/);
+  assert.ok(!r.stdout.includes(key), "ключ не должен появляться в выводе");
+});
+
+test("status показывает план и состояние ключа с сервера", async () => {
+  const http = await import("node:http");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        ok: true,
+        key: { status: "active", name: "laptop", lastUsedAt: "2026-11-11T00:00:00Z", requestCount: 7 },
+        account: { plan: "pro" },
+        pricing: { creditRub: 0.1 },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  try {
+    const { stdout } = await execFileAsync(process.execPath, [CLI, "status"], {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        SREZAI_CONFIG: "/nonexistent/srezai/config.json",
+        SREZAI_API_KEY: ["srz", "live", "abcdefgh1234"].join("_"),
+        SREZAI_CLI_DEV: "1",
+        SREZAI_DEV_BASE_URL: `http://127.0.0.1:${port}`,
+      },
+    });
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.key.status, "active");
+    assert.equal(payload.account.plan, "pro");
+    assert.equal(payload.pricing.creditRub, 0.1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("status объясняет отклонённый ключ", async () => {
+  const http = await import("node:http");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+  const server = http.createServer((req, res) => {
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { code: "revoked_key" }, message: "Ключ отозван" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  try {
+    const { stdout } = await execFileAsync(process.execPath, [CLI, "status"], {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        SREZAI_CONFIG: "/nonexistent/srezai/config.json",
+        SREZAI_API_KEY: ["srz", "live", "abcdefgh1234"].join("_"),
+        SREZAI_CLI_DEV: "1",
+        SREZAI_DEV_BASE_URL: `http://127.0.0.1:${port}`,
+      },
+    });
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.ok, false);
+    assert.match(payload.nextAction, /dashboard/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test("версия в bin совпадает с package.json", () => {

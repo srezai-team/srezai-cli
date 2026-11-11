@@ -232,6 +232,7 @@ const BOOLEAN_FLAGS = new Set([
   "safe",
   "webmcp",
   "async",
+  "offline",
 ]);
 
 function setFlag(flags, name, value) {
@@ -519,6 +520,66 @@ const COMMANDS = {
       return Promise.resolve(payload);
     },
   },
+
+  status: {
+    usage: "srezai status [--offline]",
+    summary: "Проверка аккаунта: ключ, план, состояние ключа, последний вызов и цены. Ничего не тратит.",
+    async run(_positionals, flags) {
+      const { key, source } = resolveKey();
+      const payload = {
+        ok: true,
+        version: VERSION,
+        baseUrl: API_BASE,
+        key: {
+          present: Boolean(key),
+          masked: maskKey(key),
+          source,
+          configPath: configPath(),
+        },
+      };
+      // Без ключа сети не касаемся: пробный режим и так известен локально.
+      if (!key) {
+        payload.trial = {
+          available: true,
+          commands: ["search", "read", "transcript"],
+          requestsPerDay: 25,
+        };
+        payload.nextAction =
+          "Ключа нет. Пробный режим: search, read, transcript — 25 запросов в сутки. Регистрация: srezai register --email …";
+        return payload;
+      }
+      if (flags.offline) {
+        payload.nextAction =
+          "Проверка без сети: ключ на месте. Уберите --offline, чтобы увидеть план и состояние ключа.";
+        return payload;
+      }
+      try {
+        // GET /api/v1/whoami — та же ручка, что у панели ключей: маска, статус,
+        // последнее использование, план и цены. Квоту и баланс она не отдаёт.
+        const remote = await request("GET", "/api/v1/whoami", undefined, flags);
+        payload.key.status = remote?.key?.status ?? "unknown";
+        payload.key.name = remote?.key?.name ?? null;
+        payload.key.lastUsedAt = remote?.key?.lastUsedAt ?? null;
+        payload.key.requestCount = remote?.key?.requestCount ?? null;
+        payload.account = remote?.account ?? null;
+        payload.pricing = remote?.pricing ?? null;
+        const active = payload.key.status === "active" || payload.key.status === "unknown";
+        payload.ok = active;
+        payload.nextAction = active
+          ? "Всё в порядке. Можно работать: srezai search \"…\""
+          : "Ключ не активен. Выпустите новый в кабинете: https://srezai.ru/dashboard";
+      } catch (error) {
+        if (!(error instanceof CliError)) throw error;
+        payload.ok = false;
+        payload.error = { code: error.code, message: error.message };
+        payload.nextAction =
+          error.exit === EXIT.auth
+            ? "Ключ отклонён. Проверьте SREZAI_API_KEY или выпустите новый: https://srezai.ru/dashboard"
+            : "Сервер недоступен. Проверьте сеть и повторите: srezai status";
+      }
+      return payload;
+    },
+  },
 };
 COMMANDS["auth"] = COMMANDS.whoami;
 
@@ -534,7 +595,7 @@ function printHelp() {
     "      Локальная проверка ключа и адреса API.",
     "",
     "Общие флаги: --pretty (JSON с отступами), --human (текст вместо JSON),",
-    "             --verbose (диагностика в stderr), --timeout <сек>",
+    "             --offline (status без сети), --verbose (диагностика в stderr), --timeout <сек>",
     "",
     "Ключ: SREZAI_API_KEY или ~/.config/srezai/config.json (chmod 600).",
     "Без ключа работает пробный режим — лимит на IP, без регистрации.",
