@@ -19,7 +19,73 @@ import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
+
+// Атрибуция вызова. Сервер пишет строку в search_logs.client и отдаёт её в
+// get_usage как by_skill/by_client. Без этого видно только «N вызовов за сутки»,
+// но не «каким скиллом» — а именно это решает, какой скилл развивать и стоит ли
+// новый скилл своей цены. Формат согласован с сервером:
+//   srezai-cli/0.1.1 skill/srezai-research@0.6.1 channel/cli
+// Токены через пробел, значения только [A-Za-z0-9._@+-], вся строка ≤160.
+const SKILL_BY_PATH = [
+  ["/api/v1/search", "srezai-search"],
+  ["/api/v1/media", "srezai-search"],
+  ["/api/v1/read", "srezai-read"],
+  ["/api/v1/extract", "srezai-read"],
+  ["/api/v1/fetch", "srezai-read"],
+  ["/api/v1/map", "srezai-site"],
+  ["/api/v1/crawl", "srezai-site"],
+  ["/api/v1/verify", "srezai-research"],
+  ["/api/v1/answer", "srezai-research"],
+  ["/api/v1/deep", "srezai-research"],
+  ["/api/v1/transcript", "srezai-transcript"],
+  ["/api/v1/auth/", "srezai-web"],
+  ["/api/v1/whoami", "srezai-web"],
+];
+/** Путь команды — нужен только для диагностики (srezai client-tag <команда>). */
+const PATH_BY_COMMAND = {
+  search: "/api/v1/search",
+  read: "/api/v1/read",
+  map: "/api/v1/map",
+  crawl: "/api/v1/crawl",
+  extract: "/api/v1/extract",
+  fetch: "/api/v1/fetch",
+  verify: "/api/v1/verify",
+  answer: "/api/v1/answer",
+  deep: "/api/v1/deep",
+  transcript: "/api/v1/transcript",
+  media: "/api/v1/media",
+  whoami: "/api/v1/whoami",
+  auth: "/api/v1/whoami",
+  status: "/api/v1/whoami",
+  register: "/api/v1/auth/quick-register",
+};
+const TAG_ALLOWED = /[^A-Za-z0-9._@+-]/g;
+function tagValue(value, fallback = "") {
+  const clean = String(value ?? "").replace(TAG_ALLOWED, "").slice(0, 64);
+  return clean || fallback;
+}
+/**
+ * Какой скилл вызвал запрос: явное указание (--skill / SREZAI_SKILL) важнее
+ * догадки по эндпоинту. Догадка бесплатна: скиллы не нужно учить передавать флаг.
+ */
+function skillFor(path, flags = {}) {
+  const explicit = flags.skill ?? process.env.SREZAI_SKILL;
+  if (explicit) return tagValue(explicit);
+  const found = SKILL_BY_PATH.find(([prefix]) => String(path).startsWith(prefix));
+  return found ? found[1] : "";
+}
+/** Заголовок X-Client: клиент, скилл (с версией, если известна) и канал. */
+function clientTag(path, flags = {}) {
+  const parts = [`srezai-cli/${VERSION}`];
+  const skill = skillFor(path, flags);
+  if (skill) {
+    const skillVersion = tagValue(flags["skill-version"] ?? process.env.SREZAI_SKILL_VERSION);
+    parts.push(skillVersion ? `skill/${skill}@${skillVersion}` : `skill/${skill}`);
+  }
+  parts.push(`channel/${tagValue(flags.channel ?? process.env.SREZAI_CHANNEL, "cli")}`);
+  return parts.join(" ").slice(0, 160);
+}
 
 // 🔴 В релизной сборке фиксирован. Переопределение — только для тестов самого CLI,
 // и только при явном SREZAI_CLI_DEV=1: без него переменная игнорируется.
@@ -126,6 +192,7 @@ async function request(method, path, body, flags = {}) {
   const headers = {
     accept: "application/json",
     "user-agent": `srezai-cli/${VERSION} (node ${process.version}; ${process.platform} ${process.arch})`,
+    "x-client": clientTag(path, flags),
     "x-srezai-skill": `srezai-cli/${VERSION}`,
   };
   if (body !== undefined) headers["content-type"] = "application/json";
@@ -582,6 +649,24 @@ const COMMANDS = {
   },
 };
 COMMANDS["auth"] = COMMANDS.whoami;
+
+// Диагностика атрибуции: показать, что уйдёт в X-Client, не делая запроса.
+// Нужна поддержке и тестам: «какой скилл вы отправляете?» проверяется одной командой.
+COMMANDS["client-tag"] = {
+  usage: "srezai client-tag <команда>",
+  summary: "Диагностика: заголовок X-Client, который уйдёт с запросом команды.",
+  run(positionals, flags) {
+    const target = positionals[0] || "search";
+    const path = PATH_BY_COMMAND[target];
+    if (!path) {
+      throw new CliError(
+        `Неизвестная команда «${target}». Известные: ${Object.keys(PATH_BY_COMMAND).join(", ")}`,
+        { exit: EXIT.usage },
+      );
+    }
+    return { command: target, "x-client": clientTag(path, flags) };
+  },
+};
 
 function printHelp() {
   const lines = [

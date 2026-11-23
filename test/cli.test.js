@@ -266,3 +266,48 @@ test("версия в bin совпадает с package.json", () => {
   const source = readFileSync(CLI, "utf8");
   assert.match(source, new RegExp(`const VERSION = "${pkg.version.replace(/\./g, "\\.")}"`));
 });
+
+// --- атрибуция (X-Client): по ней сервер считает by_skill в get_usage ---
+
+test("client-tag: скилл выводится из команды", () => {
+  const cases = {
+    search: "srezai-search",
+    read: "srezai-read",
+    map: "srezai-site",
+    verify: "srezai-research",
+    transcript: "srezai-transcript",
+    whoami: "srezai-web",
+  };
+  for (const [cmd, skill] of Object.entries(cases)) {
+    const r = run(["client-tag", cmd]);
+    assert.equal(r.code, 0, `${cmd}: ${r.stderr}`);
+    const tag = JSON.parse(r.stdout)["x-client"];
+    assert.match(tag, new RegExp(`^srezai-cli/\\d+\\.\\d+\\.\\d+ skill/${skill}(@[A-Za-z0-9._-]+)? channel/cli$`));
+    assert.ok(tag.length <= 160, "X-Client длиннее 160 символов");
+  }
+});
+
+test("client-tag: env переопределяет скилл и версию", () => {
+  const r = run(["client-tag", "read"], { SREZAI_SKILL: "srezai-build", SREZAI_SKILL_VERSION: "0.6.1" });
+  assert.equal(r.code, 0);
+  assert.equal(JSON.parse(r.stdout)["x-client"], `srezai-cli/${JSON.parse(r.stdout)["x-client"].split("/")[1].split(" ")[0]} skill/srezai-build@0.6.1 channel/cli`);
+});
+
+test("client-tag: мусор в env не ломает формат", () => {
+  const r = run(["client-tag", "search"], { SREZAI_SKILL: "evil; rm -rf /$(id)", SREZAI_SKILL_VERSION: "1.0;x" });
+  assert.equal(r.code, 0);
+  const tag = JSON.parse(r.stdout)["x-client"];
+  // Токены разделены пробелами — это формат. Пробелов ВНУТРИ значения быть не должно:
+  // иначе мусор из env развалит разбор на сервере.
+  const tokens = tag.split(" ");
+  assert.equal(tokens.length, 3, `ожидалось 3 токена, получено: ${tag}`);
+  assert.match(tokens[0], /^srezai-cli\/[0-9.]+$/);
+  assert.match(tokens[1], /^skill\/[A-Za-z0-9._@+-]+$/);
+  assert.equal(tokens[2], "channel/cli");
+});
+
+test("client-tag: неизвестная команда — код 2 и подсказка", () => {
+  const r = run(["client-tag", "nope"]);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /Известные:/);
+});
