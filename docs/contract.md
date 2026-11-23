@@ -19,6 +19,7 @@
 | `transcript` | `POST /api/v1/transcript` | videos[], languages[], from, to, maxChars, speakers, timestamps |
 | `media` | `POST /api/v1/media` | query, num, safe, timeRange |
 | `register` | `POST /api/v1/auth/quick-register` | email |
+| `status` | `GET /api/v1/whoami` (только с ключом; без ключа — локально) | — |
 | `whoami` | — (локально) | — |
 
 ## Коды ошибок и exit codes
