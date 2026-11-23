@@ -60,9 +60,13 @@ jobs:
       - name: проверить, не опубликована ли версия уже (повторный запуск)
         id: check
         run: |
+          # Сравниваем с версией в package.json, а не с константой: иначе после
+          # первого релиза любой следующий тег считался «уже опубликованным»
+          # (так 0.1.1 молча пропустил публикацию 23.11.2026).
           version="$(npm view srezai-cli version 2>/dev/null || true)"
-          echo "в npm сейчас: ${version:-<нет>}"
-          if [ "$version" = "0.1.0" ]; then echo "already=true" >> "$GITHUB_OUTPUT"; else echo "already=false" >> "$GITHUB_OUTPUT"; fi
+          pkg="$(node -p "require('./package.json').version")"
+          echo "в npm: ${version:-<нет>} · в пакете: $pkg"
+          if [ "$version" = "$pkg" ]; then echo "already=true" >> "$GITHUB_OUTPUT"; else echo "already=false" >> "$GITHUB_OUTPUT"; fi
       - name: версия уже в npm — публикацию пропускаем
         id: already
         if: steps.check.outputs.already == 'true'
@@ -114,9 +118,13 @@ jobs:
       - name: проверить, не опубликована ли версия уже
         id: check
         run: |
+          # Сравниваем с версией в package.json, а не с константой: иначе после
+          # первого релиза любой следующий тег считался «уже опубликованным»
+          # (так 0.1.1 молча пропустил публикацию 23.11.2026).
           version="$(npm view srezai-cli version 2>/dev/null || true)"
-          echo "в npm сейчас: ${version:-<нет>}"
-          if [ "$version" = "0.1.0" ]; then echo "already=true" >> "$GITHUB_OUTPUT"; else echo "already=false" >> "$GITHUB_OUTPUT"; fi
+          pkg="$(node -p "require('./package.json').version")"
+          echo "в npm: ${version:-<нет>} · в пакете: $pkg"
+          if [ "$version" = "$pkg" ]; then echo "already=true" >> "$GITHUB_OUTPUT"; else echo "already=false" >> "$GITHUB_OUTPUT"; fi
       - name: версия уже в npm — публикацию пропускаем
         id: already
         if: steps.check.outputs.already == 'true'
